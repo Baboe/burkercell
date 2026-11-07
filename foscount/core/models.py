@@ -76,6 +76,9 @@ class Grid:
     v_lines: list[float] = field(default_factory=list)  # in rotated frame
     h_lines: list[float] = field(default_factory=list)
     line_width_px: float = 3.0
+    # True when 1/4-width strips (Bürker double lines) were seen next to the
+    # squares, which confirms the squares are the 0.2 mm large squares
+    strips_found: bool = False
 
 
 @dataclass

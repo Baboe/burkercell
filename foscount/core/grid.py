@@ -199,7 +199,7 @@ def detect_grid(img: np.ndarray, chamber: Chamber | None = None,
             px_per_mm = 0.5 * (xs + ys) / chamber.square_side_mm
             best = Grid(angle_deg=angle, center=center, squares=squares,
                         px_per_mm=px_per_mm, v_lines=list(v), h_lines=list(hl),
-                        line_width_px=max(vw, hw))
+                        line_width_px=max(vw, hw), strips_found=bool(xconf and yconf))
             best_score = sc
     return best
 

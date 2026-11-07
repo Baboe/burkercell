@@ -88,18 +88,20 @@ class ImageAnalysis:
         img = self.image.copy()
         h, w = img.shape[:2]
         th = max(1, int(round(min(h, w) / 500)))
+        fs = max(0.3, min(h, w) / 1100)  # font scale
         counts, assign = self.counts()
         if self.grid is not None:
             k = 0
             for sq in self.grid.squares:
                 pts = square_corners(self.grid, sq).astype(np.int32)
                 if sq.selected:
-                    cv2.polylines(img, [pts], True, (255, 160, 0), 2 * th)
+                    cv2.polylines(img, [pts], True, (237, 58, 124), 2 * th)
                     tl = pts[0]
                     c = counts[k]
                     label = f"{c.total}" if mode == Mode.UNSTAINED else f"L{c.live} D{c.dead}"
-                    cv2.putText(img, label, (int(tl[0]) + 6 * th, int(tl[1]) + 22 * th),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7 * th, (255, 160, 0), 2 * th)
+                    org = (int(tl[0]) + int(8 * fs) + 2, int(tl[1]) + int(30 * fs) + 2)
+                    cv2.putText(img, label, org, cv2.FONT_HERSHEY_SIMPLEX, fs, (255, 255, 255), 3 * th)
+                    cv2.putText(img, label, org, cv2.FONT_HERSHEY_SIMPLEX, fs, (63, 29, 46), th)
                     k += 1
                 else:
                     cv2.polylines(img, [pts], True, (160, 160, 160), th)

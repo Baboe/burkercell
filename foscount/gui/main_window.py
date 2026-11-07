@@ -9,7 +9,7 @@ from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-                               QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QHBoxLayout, QLabel, QLayout, QLineEdit, QListWidget,
                                QMainWindow, QMessageBox, QProgressDialog, QPushButton,
                                QScrollArea, QSizePolicy, QSlider, QSplitter,
                                QTabWidget, QVBoxLayout, QWidget)
@@ -247,9 +247,11 @@ class MainWindow(QMainWindow):
         cg, cgl = theme.card("Chamber")
         cf = QFormLayout()
         cgl.addLayout(cf)
-        ch_hint = QLabel("Standard Bürker: 0.2 mm squares, 0.1 mm deep")
+        ch_hint = QLabel("Side of the squares the grid detector finds. Bürker: 0.2 mm "
+                         "large squares (0.05 mm for small squares), 0.1 mm deep.")
+        ch_hint.setWordWrap(True)
         ch_hint.setObjectName("hint")
-        cf.addRow("Large square side:", self.sq_side)
+        cf.addRow("Counting square side:", self.sq_side)
         cf.addRow("Depth:", self.chamber_depth)
         cgl.addWidget(ch_hint)
 
@@ -279,7 +281,7 @@ class MainWindow(QMainWindow):
             lab.setWordWrap(True)
             lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             # let the label wrap to the panel width instead of widening it
-            lab.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            lab.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
             lab.setMinimumWidth(10)
         rg, rl = theme.card("Results")
         self.res_big = QLabel("–")
@@ -297,11 +299,14 @@ class MainWindow(QMainWindow):
         right.setObjectName("sideInner")
         rlay = QVBoxLayout(right)
         rlay.setContentsMargins(12, 14, 14, 14)
+        # never squeeze the cards; let the scroll area scroll instead
+        rlay.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         rlay.setSpacing(12)
         for g in (rg, sg, dg, ag, cg):
             rlay.addWidget(g)
         rlay.addStretch(1)
         scroll = QScrollArea()
+        self.side_scroll = scroll
         scroll.setObjectName("sideScroll")
         scroll.setWidget(right)
         scroll.setWidgetResizable(True)
@@ -422,6 +427,11 @@ class MainWindow(QMainWindow):
                          "<b>Draw square</b> to mark the large squares by hand.</span>")
             elif a.grid_found and a.grid.px_per_mm:
                 extra = f"<br><span style='color:gray'>Scale: {a.grid.px_per_mm:.0f} px/mm, grid angle {a.grid.angle_deg:.1f}°</span>"
+                if not a.grid.strips_found:
+                    extra += ("<br><span style='color:#B45309'>⚠ Uniform grid without double-line "
+                              "strips: check that <b>Counting square side</b> matches the squares "
+                              f"in this photo (now {self.sq_side.value():g} mm; Bürker large squares "
+                              "are 0.2 mm, small squares 0.05 mm).</span>")
             self.res_img.setText(summary_html(title, s, mode) + extra)
             big = s.live_per_ml if mode == Mode.TRYPAN and s.live_per_ml is not None else s.concentration_per_ml
             self.res_big.setText(_sup(format_conc(big)) if s.n_squares else "–")
@@ -437,6 +447,7 @@ class MainWindow(QMainWindow):
                 f"Sample (all {len(self.analyses)} images pooled)", self.sample_summary(), mode))
         else:
             self.res_sample.setText("")
+        self._fit_labels()
         for i, an in enumerate(self.analyses):
             c, _ = an.counts()
             it = self.list.item(i)
@@ -444,6 +455,20 @@ class MainWindow(QMainWindow):
                 tot = sum(x.total for x in c)
                 it.setText(f"{an.name}  —  {len(c)} sq, {tot} cells" if an.grid and an.grid.squares
                            else f"{an.name}  —  no grid")
+
+    def _fit_labels(self):
+        """Wrapped rich-text labels do not report their height reliably to the
+        layout; size them for the current panel width."""
+        w = self.side_scroll.viewport().width() - 64
+        if w < 100:
+            w = self.side_scroll.minimumWidth() - 64
+        for lab in (self.res_img, self.res_sample):
+            lab.setFixedHeight(lab.heightForWidth(w) if lab.text() else 0)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        if hasattr(self, "res_img"):
+            self._fit_labels()
 
     def sample_counts(self):
         out = []

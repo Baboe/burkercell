@@ -9,7 +9,7 @@ import numpy as np
 from scipy import ndimage as ndi
 
 from .grid import line_mask, to_grid_frame
-from .models import Cell, CellState, Grid, Mode, SquareCount
+from .models import Cell, CellState, Grid, Mode, Square, SquareCount
 
 
 @dataclass
@@ -18,9 +18,10 @@ class DetectParams:
     cell_diameter_um: float = 12.0  # used when the grid gives a px/mm scale
     cell_diameter_px: float = 20.0  # fallback when no scale is known
     sensitivity: int = 50  # 0..100, higher finds fainter objects
-    min_size: float = 0.5  # relative to expected diameter
+    min_size: float = 0.6  # relative to expected diameter
     max_size: float = 2.0
     split_touching: bool = True
+    circle_pass: bool = True  # also look for round cells with a circle detector
     max_elongation: float = 2.2  # major/minor axis ratio above which a blob is rejected
     dead_threshold: float = 20.0  # trypan stain score above which a cell is dead
     mask_grid_lines: bool = True
@@ -99,9 +100,39 @@ def split_blobs(binary: np.ndarray, r_exp: float) -> tuple[np.ndarray, int]:
     return labels, n
 
 
+MIN_CELL_PX = 18.0  # below this expected diameter the image is upsampled first
+
+
+def _scaled_grid(grid: Grid, f: float) -> Grid:
+    return Grid(angle_deg=grid.angle_deg, center=(grid.center[0] * f, grid.center[1] * f),
+                squares=[Square(q.x0 * f, q.y0 * f, q.x1 * f, q.y1 * f, q.row, q.col, q.selected)
+                         for q in grid.squares],
+                px_per_mm=grid.px_per_mm * f if grid.px_per_mm else None,
+                v_lines=[v * f for v in grid.v_lines], h_lines=[h * f for h in grid.h_lines],
+                line_width_px=grid.line_width_px * f)
+
+
 def detect_cells(img: np.ndarray, params: DetectParams,
                  grid: Grid | None = None) -> list[Cell]:
-    """Detect cells in a BGR (or grayscale) image."""
+    """Detect cells in a BGR (or grayscale) image.
+
+    Small cells (low resolution or low magnification) are detected on an
+    upsampled copy so the morphological steps have enough pixels to work with.
+    """
+    d = params.diameter_px(grid)
+    if d >= MIN_CELL_PX:
+        return _detect_cells(img, params, grid)
+    f = min(4.0, MIN_CELL_PX / d)
+    big = cv2.resize(img, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC)
+    p2 = DetectParams(**{**params.__dict__, "cell_diameter_px": params.cell_diameter_px * f})
+    cells = _detect_cells(big, p2, _scaled_grid(grid, f) if grid is not None else None)
+    for c in cells:
+        c.x, c.y, c.radius = c.x / f, c.y / f, c.radius / f
+    return cells
+
+
+def _detect_cells(img: np.ndarray, params: DetectParams,
+                  grid: Grid | None = None) -> list[Cell]:
     color = img if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY).astype(np.float32)
     d = params.diameter_px(grid)
@@ -140,9 +171,7 @@ def detect_cells(img: np.ndarray, params: DetectParams,
     a_min = np.pi * (params.min_size * r_exp) ** 2
     a_max = np.pi * (params.max_size * r_exp) ** 2
     cells: list[Cell] = []
-    if n <= 0:
-        return cells
-    for lab_id, sl in enumerate(ndi.find_objects(labels), start=1):
+    for lab_id, sl in enumerate(ndi.find_objects(labels) if n > 0 else [], start=1):
         if sl is None:
             continue
         ys, xs = np.nonzero(labels[sl] == lab_id)
@@ -159,11 +188,52 @@ def detect_cells(img: np.ndarray, params: DetectParams,
         cy = float(ys.mean() + sl[0].start)
         cells.append(Cell(cx, cy, float(np.sqrt(area / np.pi))))
 
+    if params.circle_pass:
+        raw_dev = np.abs(gray - bg)
+        cells += _circle_pass(gray, raw_dev, med + k * spread, cells, r_exp, params.sensitivity)
+
     # stain scores are always computed so the mode can be switched later
     # without re-detecting (darkness uses the line-free image)
     stain_scores(color, gray, bg, cells)
     set_mode(cells, params.mode, params.dead_threshold)
     return cells
+
+
+def _circle_pass(gray: np.ndarray, dev: np.ndarray, thr: float, found: list[Cell],
+                 r_exp: float, sensitivity: int) -> list[Cell]:
+    """Find round cells missed by the threshold mask (faint or partial
+    outlines, touching pairs) with a Hough circle transform.
+
+    A circle is kept only if the image clearly differs from the background
+    along its outline and it does not duplicate an existing detection.
+    """
+    g8 = cv2.GaussianBlur(np.clip(gray, 0, 255).astype(np.uint8), (0, 0), max(1.0, r_exp / 6))
+    # votes scale with the circumference, so the threshold scales with radius
+    acc = max(6, int(round(r_exp * (2.0 - 0.016 * float(np.clip(sensitivity, 0, 100))))))
+    circles = cv2.HoughCircles(g8, cv2.HOUGH_GRADIENT, dp=1, minDist=max(3, int(1.1 * r_exp)),
+                               param1=60, param2=acc,
+                               minRadius=max(2, int(0.6 * r_exp)),
+                               maxRadius=max(3, int(1.5 * r_exp)))
+    if circles is None:
+        return []
+    h, w = gray.shape
+    ang = np.linspace(0, 2 * np.pi, 32, endpoint=False)
+    out: list[Cell] = []
+    for x, y, r in circles[0]:
+        if any((c.x - x) ** 2 + (c.y - y) ** 2 < (0.8 * max(r, c.radius)) ** 2
+               for c in found + out):
+            continue
+        # strongest deviation in a thin band around the circle, per angle
+        best = np.zeros_like(ang)
+        for rr in (r - 1.5, r, r + 1.5):
+            xs = np.clip(np.round(x + rr * np.cos(ang)).astype(int), 0, w - 1)
+            ys = np.clip(np.round(y + rr * np.sin(ang)).astype(int), 0, h - 1)
+            best = np.maximum(best, dev[ys, xs])
+        # most of the outline must stand out from the background
+        if np.mean(best > thr) < 0.5:
+            continue
+        out.append(Cell(float(x), float(y), float(r)))
+    return out
 
 
 def set_mode(cells: list[Cell], mode: Mode, threshold: float) -> None:

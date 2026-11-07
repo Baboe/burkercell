@@ -90,7 +90,8 @@ class ImageView(QGraphicsView):
                 poly = QPolygonF([QPointF(float(x), float(y)) for x, y in pts])
                 item = QGraphicsPolygonItem(poly)
                 col = COL_SQUARE if sq.selected else COL_SQUARE_OFF
-                pen = QPen(col, lw * (2.5 if sq.selected else 1.2))
+                pen = QPen(col, 2.5 if sq.selected else 1.2)
+                pen.setCosmetic(True)  # constant on-screen width at any zoom
                 if not sq.selected:
                     pen.setStyle(Qt.PenStyle.DashLine)
                 item.setPen(pen)
@@ -103,7 +104,7 @@ class ImageView(QGraphicsView):
                     t = QGraphicsSimpleTextItem(txt)
                     t.setBrush(QBrush(QColor("white")))
                     f = t.font()
-                    f.setPixelSize(int(max(12, w / 70)))
+                    f.setPixelSize(int(max(5, w / 70)))
                     f.setBold(True)
                     t.setFont(f)
                     pos = QPointF(float(pts[0][0]) + 4 * lw, float(pts[0][1]) + 4 * lw)
@@ -133,7 +134,8 @@ class ImageView(QGraphicsView):
                 col.setAlpha(110)
             r = max(3.0, c.radius)
             e = QGraphicsEllipseItem(c.x - r, c.y - r, 2 * r, 2 * r)
-            pen = QPen(col, lw * (2.0 if counted else 1.0))
+            pen = QPen(col, 2.0 if counted else 1.0)
+            pen.setCosmetic(True)
             if c.manual:
                 pen.setStyle(Qt.PenStyle.DashLine)
             e.setPen(pen)

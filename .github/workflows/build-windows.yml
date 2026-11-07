@@ -74,10 +74,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: Foscount ${{ steps.ver.outputs.version }}
-          files: dist/*.exe
+          files: |
+            dist/*.exe
+            docs/Foscount-Read-First.pdf
           body: |
             **Download for Windows 10/11 (64-bit):**
             - `Foscount-Setup-${{ steps.ver.outputs.version }}.exe`: installer (Start menu and desktop shortcut, no administrator rights needed). Recommended.
             - `Foscount-portable-${{ steps.ver.outputs.version }}.exe`: single file that runs without installing (starts more slowly).
+
+            - `Foscount-Read-First.pdf`: short install guide and first-count walkthrough.
 
             Windows SmartScreen may warn because the app is not code-signed: click **More info → Run anyway**.

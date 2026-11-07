@@ -34,9 +34,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "..\dist\Foscount\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\examples\*"; DestDir: "{app}\examples"; Flags: ignoreversion
+Source: "..\docs\Foscount-Read-First.pdf"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Foscount"; Filename: "{app}\Foscount.exe"
+Name: "{group}\Read this first (PDF)"; Filename: "{app}\Foscount-Read-First.pdf"
 Name: "{group}\Example images"; Filename: "{app}\examples"
 Name: "{group}\Uninstall Foscount"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Foscount"; Filename: "{app}\Foscount.exe"; Tasks: desktopicon

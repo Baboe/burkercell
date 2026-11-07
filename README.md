@@ -11,6 +11,8 @@ Get the latest version from the **[Releases page](https://github.com/Baboe/burke
 - **`Foscount-Setup-x.y.z.exe`**: installer with Start-menu and desktop shortcuts. No administrator rights are needed. Recommended.
 - **`Foscount-portable-x.y.z.exe`**: a single file that runs without installing. It starts more slowly.
 
+New here? Read the short **[Read this first (PDF)](docs/Foscount-Read-First.pdf)**. It covers installation and a first count, step by step.
+
 The app is not code-signed yet, so Windows SmartScreen may show a warning. Click **More info → Run anyway**.
 
 ## What it does
@@ -85,6 +87,10 @@ python tools/build_desktop.py --folder
 ```bash
 iscc installer\foscount.iss
 ```
+
+### Install guide PDF
+
+`docs/Foscount-Read-First.pdf` is generated from `tools/make_install_pdf.py`. Edit the text there and run `python tools/make_install_pdf.py` to rebuild it.
 
 ### Fonts
 

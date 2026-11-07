@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 from scipy import ndimage as ndi
 
+from .fov import field_of_view, fill_outside
 from .grid import line_mask, to_grid_frame
 from .models import Cell, CellState, Grid, Mode, Square, SquareCount
 
@@ -21,6 +22,7 @@ class DetectParams:
     min_size: float = 0.6  # relative to expected diameter
     max_size: float = 2.0
     split_touching: bool = True
+    require_dark: bool = True  # reject objects without any dark outline/body
     circle_pass: bool = True  # also look for round cells with a circle detector
     max_elongation: float = 2.2  # major/minor axis ratio above which a blob is rejected
     dead_threshold: float = 20.0  # trypan stain score above which a cell is dead
@@ -137,6 +139,8 @@ def _detect_cells(img: np.ndarray, params: DetectParams,
     gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY).astype(np.float32)
     d = params.diameter_px(grid)
     r_exp = d / 2.0
+    fov = field_of_view(gray)
+    gray = fill_outside(gray, fov)
 
     # background and deviation map: cells differ from the background, darker
     # rims and (for live cells) brighter centres both count.
@@ -153,12 +157,14 @@ def _detect_cells(img: np.ndarray, params: DetectParams,
 
     # robust background spread: only use the lower half of the distribution,
     # which is dominated by empty background even when many cells are present.
-    valid = dev.ravel()
+    valid = dev[fov] if fov is not None else dev.ravel()
     med = float(np.median(valid))
     low = valid[valid <= med]
     spread = float(np.median(med - low)) * 1.4826 + 1e-3
     k = 12.0 - 0.1 * float(np.clip(params.sensitivity, 0, 100))  # 12 .. 2
     binary = (dev > med + k * spread).astype(np.uint8)
+    if fov is not None:
+        binary[~fov] = 0
 
     ks = _odd(d / 5)
     kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
@@ -190,7 +196,21 @@ def _detect_cells(img: np.ndarray, params: DetectParams,
 
     if params.circle_pass:
         raw_dev = np.abs(gray - bg)
-        cells += _circle_pass(gray, raw_dev, med + k * spread, cells, r_exp, params.sensitivity)
+        cells += _circle_pass(gray, raw_dev, med + k * spread, cells, r_exp, params.sensitivity,
+                              lines)
+
+    # real cells in brightfield always show a dark outline or a dark (stained)
+    # body; bright grid-line remnants and glare do not
+    if fov is not None:
+        h_, w_ = fov.shape
+        cells = [c for c in cells
+                 if fov[min(h_ - 1, max(0, int(c.y))), min(w_ - 1, max(0, int(c.x)))]]
+
+    if params.require_dark and cells:
+        con = np.array([_dark_contrast(gray, bg, c) for c in cells])
+        # absolute floor, plus: not much fainter than the typical cell here
+        floor = max(0.6 * (med + k * spread), 0.4 * float(np.median(con)))
+        cells = [c for c, v in zip(cells, con) if v > floor]
 
     # stain scores are always computed so the mode can be switched later
     # without re-detecting (darkness uses the line-free image)
@@ -199,8 +219,25 @@ def _detect_cells(img: np.ndarray, params: DetectParams,
     return cells
 
 
+def _dark_contrast(gray: np.ndarray, bg: np.ndarray, c: Cell) -> float:
+    """How much darker than the background the darkest part of a cell is."""
+    h, w = gray.shape
+    rr = c.radius * 1.15 + 1
+    x0, x1 = int(max(0, c.x - rr)), int(min(w, c.x + rr + 1))
+    y0, y1 = int(max(0, c.y - rr)), int(min(h, c.y + rr + 1))
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    m = (xx - c.x) ** 2 + (yy - c.y) ** 2 <= rr * rr
+    if not m.any():
+        return 0.0
+    diff = (bg[y0:y1, x0:x1] - gray[y0:y1, x0:x1])[m]
+    return float(np.percentile(diff, 90))
+
+
 def _circle_pass(gray: np.ndarray, dev: np.ndarray, thr: float, found: list[Cell],
-                 r_exp: float, sensitivity: int) -> list[Cell]:
+                 r_exp: float, sensitivity: int,
+                 lines: np.ndarray | None = None) -> list[Cell]:
     """Find round cells missed by the threshold mask (faint or partial
     outlines, touching pairs) with a Hough circle transform.
 
@@ -218,6 +255,15 @@ def _circle_pass(gray: np.ndarray, dev: np.ndarray, thr: float, found: list[Cell
         return []
     h, w = gray.shape
     ang = np.linspace(0, 2 * np.pi, 32, endpoint=False)
+    near_line = None
+    if lines is not None:
+        near_line = cv2.dilate(lines, np.ones((5, 5), np.uint8)) > 0
+
+    def ring(x, y, rr):
+        xs = np.clip(np.round(x + rr * np.cos(ang)).astype(int), 0, w - 1)
+        ys = np.clip(np.round(y + rr * np.sin(ang)).astype(int), 0, h - 1)
+        return ys, xs
+
     out: list[Cell] = []
     for x, y, r in circles[0]:
         if any((c.x - x) ** 2 + (c.y - y) ** 2 < (0.8 * max(r, c.radius)) ** 2
@@ -226,11 +272,17 @@ def _circle_pass(gray: np.ndarray, dev: np.ndarray, thr: float, found: list[Cell
         # strongest deviation in a thin band around the circle, per angle
         best = np.zeros_like(ang)
         for rr in (r - 1.5, r, r + 1.5):
-            xs = np.clip(np.round(x + rr * np.cos(ang)).astype(int), 0, w - 1)
-            ys = np.clip(np.round(y + rr * np.sin(ang)).astype(int), 0, h - 1)
-            best = np.maximum(best, dev[ys, xs])
+            best = np.maximum(best, dev[ring(x, y, rr)])
         # most of the outline must stand out from the background
         if np.mean(best > thr) < 0.5:
+            continue
+        # a circle mostly lying on grid lines is a line artefact
+        if near_line is not None and np.mean(near_line[ring(x, y, r)]) > 0.3:
+            continue
+        # the surroundings must be mostly background (rejects busy line
+        # patterns such as triple lines at the chamber border)
+        outside = np.maximum(dev[ring(x, y, 1.6 * r)], dev[ring(x, y, 1.9 * r)])
+        if np.mean(outside > thr) > 0.6:
             continue
         out.append(Cell(float(x), float(y), float(r)))
     return out

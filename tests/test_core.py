@@ -119,3 +119,31 @@ def test_image_analysis_roundtrip(tmp_path):
     a.run(DetectParams(), Chamber())
     assert a.grid_found
     assert a.annotated(Mode.UNSTAINED).shape == img.shape
+
+
+def test_round_field_of_view_eyepiece_photo():
+    """Photos through the eyepiece: round bright field, black corners."""
+    import cv2
+    img, truth = make_burker_image(angle_deg=-3, seed=2, n_cells=150, dead_fraction=0.4)
+    h, w = img.shape[:2]
+    m = np.zeros((h, w), np.uint8)
+    cv2.circle(m, (w // 2, h // 2), int(0.47 * h), 1, -1)
+    m = cv2.GaussianBlur(m.astype(np.float32), (0, 0), 6)
+    img = (img * m[..., None]).astype(np.uint8)
+    g = detect_grid(img)
+    assert g is not None and g.squares
+    assert g.angle_deg == pytest.approx(-3, abs=0.2)
+    inside = [c for c in truth.cells
+              if (c[0] - w / 2) ** 2 + (c[1] - h / 2) ** 2 < (0.47 * h - 25) ** 2]
+    cells = detect_cells(img, DetectParams(mode=Mode.TRYPAN), g)
+    tp, cls_ok = _match(cells, inside)
+    assert tp / len(inside) >= 0.9
+    assert cls_ok / tp >= 0.95
+
+
+def test_tiny_line_bundle_is_not_a_square():
+    """A triple line (lines a few px apart) must not be taken for a square."""
+    img, _ = make_burker_image(seed=4, n_cells=40)
+    g = detect_grid(img)
+    side = min(q.x1 - q.x0 for q in g.squares)
+    assert side > 0.08 * min(img.shape[:2])

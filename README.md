@@ -13,6 +13,7 @@ Foscount is a desktop app that counts cells automatically in microscope photos o
   - *Trypan blue*: classifies each cell as live (clear) or dead (blue/dark). A slider adjusts the threshold.
 - **Concentration**: cells/mL = mean per large square × dilution ÷ 0.004 µL. For a standard chamber that is mean × dilution × 250 000. With trypan blue it also gives live cells/mL and viability %. A 95 % Poisson counting error is shown, along with warnings for low counts or uneven squares.
 - **Manual correction**: click to add a cell (Shift+click adds a dead cell), click a cell to toggle live/dead, right-click to remove it. Squares can be included, excluded or drawn by hand if the grid is not found.
+- **Photos through the eyepiece** (phone/camera): the round field of view is detected and the black surround is ignored; only squares completely inside the field are counted.
 - **Several photos per sample**: all images in the list are pooled into one sample result.
 - **Manual entry (no camera)**: type in counts made by eye at the microscope, or use the keyboard tally counter (`L` live/cell, `D` dead, `N` next square, `Backspace` undo).
 - **Batch processing**: processes a whole folder. Each subfolder counts as one sample, and you get a results file plus annotated images.
@@ -68,6 +69,8 @@ The UI follows the FOSCA BioTech style: aubergine `#2E1D3F`, lavender `#E6E6FA`,
 ## Chamber settings
 
 The defaults are for a standard Bürker chamber: large squares 0.2 mm, depth 0.1 mm. Both can be changed in the *Chamber* panel.
+
+**Set *Counting square side* to the squares in your photos.** The grid detector finds the squares it sees, but it cannot know their real size. A Bürker photo with the 0.05 mm strips visible between squares confirms 0.2 mm squares. A uniform grid of equal squares does not: at higher magnification these are often the 0.05 mm small squares. The app warns in that case. A wrong square size gives a wrong concentration (0.05 mm instead of 0.2 mm squares is a factor of 16).
 
 ## Development
 

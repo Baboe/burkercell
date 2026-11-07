@@ -23,6 +23,7 @@ import numpy as np
 from scipy.ndimage import median_filter
 from scipy.signal import find_peaks, peak_widths
 
+from .fov import field_of_view, fill_outside
 from .models import Chamber, Grid, Square
 
 
@@ -79,9 +80,9 @@ def _profiles(enh: np.ndarray, valid: np.ndarray) -> tuple[np.ndarray, np.ndarra
     row_n = valid.sum(axis=1)
     col = enh.sum(axis=0) / np.maximum(col_n, 1)
     row = enh.sum(axis=1) / np.maximum(row_n, 1)
-    # ignore columns/rows that are mostly outside the rotated image
-    col[col_n < 0.5 * enh.shape[0]] = 0
-    row[row_n < 0.5 * enh.shape[1]] = 0
+    # ignore columns/rows that are mostly outside the (rotated) field
+    col[col_n < 0.4 * col_n.max()] = 0
+    row[row_n < 0.4 * row_n.max()] = 0
     return col, row
 
 
@@ -173,12 +174,18 @@ def detect_grid(img: np.ndarray, chamber: Chamber | None = None,
     gray = _to_gray(img)
     h, w = gray.shape
     center = (w / 2.0, h / 2.0)
+    fov = field_of_view(gray)
+    gray = fill_outside(gray, fov)
 
     best: Grid | None = None
     best_score = -1.0
     for enh in _line_maps(gray):
+        if fov is not None:
+            enh = enh * fov
         angle, score = estimate_angle(enh, max_angle)
         rot, valid = _rotate(enh, angle, center)
+        if fov is not None:
+            valid = valid * _rotate(fov.astype(np.float32), angle, center)[0]
         col, row = _profiles(rot, valid)
         min_sep = max(3, int(min(h, w) * 0.004))
         v, vw = find_lines(col, min_sep)
@@ -187,15 +194,29 @@ def detect_grid(img: np.ndarray, chamber: Chamber | None = None,
         yi, ys, yconf = _square_intervals(hl)
         if not xi or not yi:
             continue
-        # squares must be (roughly) square
+        # squares must be (roughly) square and big enough to count in; tiny
+        # "squares" come from the 2-3 lines of a double/triple line
         if not (0.75 < xs / ys < 1.33):
             continue
-        sc = score + (1.0 if (xconf and yconf) else 0.0)
+        if min(xs, ys) < 0.08 * min(h, w):
+            continue
+        sc = (score + (1.0 if (xconf and yconf) else 0.0)
+              + 0.25 * np.log1p(len(xi) * len(yi)))
         if sc > best_score:
             squares = []
             for r, (y0, y1) in enumerate(yi):
                 for c, (x0, x1) in enumerate(xi):
                     squares.append(Square(x0, y0, x1, y1, row=r, col=c))
+            if fov is not None:  # only squares completely inside the field
+                tmp = Grid(angle_deg=angle, center=center)
+                keep = []
+                for q in squares:
+                    pts = np.round(square_corners(tmp, q)).astype(int)
+                    if all(0 <= x < w and 0 <= y < h and fov[y, x] for x, y in pts):
+                        keep.append(q)
+                squares = keep
+                if not squares:
+                    continue
             px_per_mm = 0.5 * (xs + ys) / chamber.square_side_mm
             best = Grid(angle_deg=angle, center=center, squares=squares,
                         px_per_mm=px_per_mm, v_lines=list(v), h_lines=list(hl),
